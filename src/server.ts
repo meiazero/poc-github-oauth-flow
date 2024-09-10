@@ -3,6 +3,7 @@ import Fastify from 'fastify'
 import axios from 'axios'
 
 import { IGithubUser, IOAuthAccessTokenResponse } from './types'
+import { Queue } from './schemas/user'
 
 
 const fastify = Fastify({
@@ -44,14 +45,16 @@ fastify.get('/api/v1/login/github/callback', async (request, reply) => {
 
   const { access_token } = await response as unknown as IOAuthAccessTokenResponse
 
-  reply.redirect(`/api/v1/users?access_token=${access_token}`)
+  // TODO: Send the code to the queue
+  reply.redirect(`/api/v1/users/oauth?access_token=${access_token}`)
 })
 
 /**
- * Route: http://localhost:3333/api/v1/users?access_token=TOKEN
+ * Route: http://localhost:3333/api/v1/users/oauth?access_token=ACCESS_TOKEN
  *
  */
-fastify.get('/api/v1/users', async (request, reply) => {
+fastify.get('/api/v1/users/oauth', async (request, reply) => {
+  // TODO: get the token from the queue
   const { access_token } = request.query as { access_token: string }
 
   const response = await axios.get("https://api.github.com/user", {
@@ -62,6 +65,24 @@ fastify.get('/api/v1/users', async (request, reply) => {
 
   reply.send({ response })
 })
+
+/**
+ * Route: http://localhost:3333/api/v1/users/queue?code=CODE
+ *
+ */
+fastify.get('/api/v1/users/queue', async (request, reply) => {
+  const { code } = request.query as { code: string }
+
+  const response = await Queue.findOne({ code }).then(result => {
+    if (!result) {
+      throw new Error('No queue item found');
+    }
+    return result.toJSON();
+  })
+
+  reply.send({ response })
+})
+
 
 fastify.listen({
   port: 3333,
