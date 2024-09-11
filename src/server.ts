@@ -3,8 +3,8 @@ import fastifyMongoDb from '@fastify/mongodb'
 
 import axios from 'axios'
 
-import { IGithubUser, IOAuthAccessTokenResponse } from './types'
-
+import { IGithubUser, IOAuthAccessTokenResponse, IQueue } from './types.js'
+import { newId } from './utils/new-id.js'
 
 const fastify = Fastify({
   logger: true,
@@ -37,12 +37,12 @@ fastify.get('/api/v1/login/github', async (request, reply) => {
  *
  */
 fastify.get('/api/v1/login/github/callback', async (request, reply) => {
-  const { code, state } = request.query as { code: string, state?: string }
+  const { code: githubCode, state } = request.query as { code: string, state?: string }
 
   const response = axios.post('https://github.com/login/oauth/access_token', {
     client_id: clientId,
     client_secret: secretId,
-    code,
+    code: githubCode,
     state,
   }, {
     headers: {
@@ -52,25 +52,67 @@ fastify.get('/api/v1/login/github/callback', async (request, reply) => {
 
   const { access_token } = await response as unknown as IOAuthAccessTokenResponse
 
-  // TODO: Send the code to the queue
-  reply.redirect(`/api/v1/users/oauth?access_token=${access_token}`)
+  try {
+    const queueCode = newId("queue")
+    await fastify.mongo.db?.collection('queues').insertOne({
+      task_type: 'oauth',
+      status: 'pending',
+      content: access_token,
+      code: queueCode,
+    })
+
+    reply.redirect(`/api/v1/users/oauth?code=${queueCode}`)
+
+  } catch (error) {
+    reply.send({ error })
+  }
 })
 
 /**
- * Route: http://localhost:3333/api/v1/users/oauth?access_token=ACCESS_TOKEN
+ * Route: http://localhost:3333/api/v1/users/oauth?code=QUEUE_CODE
  *
  */
 fastify.get('/api/v1/users/oauth', async (request, reply) => {
-  // TODO: get the token from the queue
-  const { access_token } = request.query as { access_token: string }
+  const { code } = request.query as { code: string }
 
-  const response = await axios.get("https://api.github.com/user", {
-    headers: {
-      Authorization: `Bearer ${access_token}`,
-    },
-  }).then(response => response.data) as unknown as { response: IGithubUser }
+  const queue = await fastify.mongo.db?.collection('queues').findOne({ code }) as unknown as IQueue
 
-  reply.send({ response })
+  if (!queue) {
+    reply.status(400).send({
+      code,
+      error: 'Invalid code'
+    })
+    return
+  }
+
+  try {
+
+    const response = await axios.get("https://api.github.com/user", {
+      headers: {
+        Authorization: `Bearer ${queue.content}`,
+      },
+    }).then(response => response.data) as unknown as IGithubUser
+
+
+    const user = await fastify.mongo.db?.collection('users').insertOne({
+      name: response.name,
+      email: response.email,
+      avatar: response.avatar_url,
+      githubId: response.id.toString(),
+    })
+
+    await fastify.mongo.db?.collection('accounts').insertOne({
+      gh_access_token: queue.content,
+      account_type: 'oauth',
+      user_id: user?.insertedId.toString(),
+    })
+
+    await fastify.mongo.db?.collection('queues').deleteOne({ code })
+
+    reply.send({ user: user?.insertedId.toString() })
+  } catch (error) {
+    reply.send({ error })
+  }
 })
 
 /**
@@ -81,7 +123,7 @@ fastify.get('/api/v1/users/queue', async (request, reply) => {
   const { code } = request.query as { code: string }
 
   // get all the queue
-  const queue = await fastify.mongo.db?.collection('queue').find({ code }).toArray()
+  const queue = await fastify.mongo.db?.collection('queues').find({ code }).toArray()
 
   reply.send({ queue })
 })
