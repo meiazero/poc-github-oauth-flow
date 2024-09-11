@@ -1,13 +1,20 @@
 import Fastify from 'fastify'
+import fastifyMongoDb from '@fastify/mongodb'
 
 import axios from 'axios'
 
 import { IGithubUser, IOAuthAccessTokenResponse } from './types'
-import { Queue } from './schemas/user'
 
 
 const fastify = Fastify({
   logger: true,
+})
+
+await fastify.register(fastifyMongoDb, {
+  // force to close the mongodb connection when app stopped
+  // the default value is false
+  forceClose: true,
+  url: process.env.MONGODB_URI,
 })
 
 const clientId = process.env.GITHUB_CLIENT_ID
@@ -73,14 +80,10 @@ fastify.get('/api/v1/users/oauth', async (request, reply) => {
 fastify.get('/api/v1/users/queue', async (request, reply) => {
   const { code } = request.query as { code: string }
 
-  const response = await Queue.findOne({ code }).then(result => {
-    if (!result) {
-      throw new Error('No queue item found');
-    }
-    return result.toJSON();
-  })
+  // get all the queue
+  const queue = await fastify.mongo.db?.collection('queue').find({ code }).toArray()
 
-  reply.send({ response })
+  reply.send({ queue })
 })
 
 
