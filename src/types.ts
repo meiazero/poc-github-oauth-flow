@@ -38,3 +38,11 @@ export type IGithubUser = {
   created_at: string
   updated_at: string
 }
+
+export type IQueue = {
+  task_type: string
+  status: string
+  content: string
+  code: string
+  createdAt: Date
+}
