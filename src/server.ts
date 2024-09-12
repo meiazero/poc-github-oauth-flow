@@ -29,7 +29,7 @@ const state = encodeURIComponent("random_state_string");
 fastify.get('/api/v1/login/github', async (request, reply) => {
   const { redirectUri } = request.query as { redirectUri: string }
 
-  reply.redirect(`https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&scope=${scope}&state=${state}`);
+  reply.redirect(`https://github.com/login/oauth/authorize?client_id=${clientId}&redirect_uri=${encodeURI(redirectUri)}&scope=${scope}&state=${state}`);
 })
 
 /**
@@ -85,34 +85,46 @@ fastify.get('/api/v1/users/oauth', async (request, reply) => {
     return
   }
 
-  try {
+  const response = await axios.get("https://api.github.com/user", {
+    headers: {
+      Authorization: `Bearer ${queue.content}`,
+    },
+  }).then(response => response.data) as unknown as IGithubUser
 
-    const response = await axios.get("https://api.github.com/user", {
-      headers: {
-        Authorization: `Bearer ${queue.content}`,
-      },
-    }).then(response => response.data) as unknown as IGithubUser
+  const userExists = await fastify.mongo.db?.collection('users').findOne({ login: response.login })
 
-
-    const user = await fastify.mongo.db?.collection('users').insertOne({
-      name: response.name,
-      email: response.email,
-      avatar: response.avatar_url,
-      githubId: response.id.toString(),
-    })
-
-    await fastify.mongo.db?.collection('accounts').insertOne({
-      gh_access_token: queue.content,
-      account_type: 'oauth',
-      user_id: user?.insertedId.toString(),
-    })
-
+  if (userExists) {
     await fastify.mongo.db?.collection('queues').deleteOne({ code })
 
-    reply.send({ user: user?.insertedId.toString() })
-  } catch (error) {
-    reply.send({ error })
+    await fastify.mongo.db?.collection('accounts').updateOne({
+      user_id: userExists._id.toString(),
+    }, {
+      $set: {
+        gh_access_token: queue.content,
+      }
+    })
+
+    reply.send({ user: userExists._id.toString() })
+    return
   }
+
+  const user = await fastify.mongo.db?.collection('users').insertOne({
+    login: response.login,
+    name: response.name,
+    email: response.email,
+    avatar: response.avatar_url,
+    githubId: response.id.toString(),
+  })
+
+  await fastify.mongo.db?.collection('accounts').insertOne({
+    gh_access_token: queue.content,
+    account_type: 'oauth',
+    user_id: user?.insertedId.toString(),
+  })
+
+  await fastify.mongo.db?.collection('queues').deleteOne({ code })
+
+  reply.send({ user: user?.insertedId.toString() })
 })
 
 /**

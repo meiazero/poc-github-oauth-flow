@@ -6,6 +6,7 @@ export type IOAuthAccessTokenResponse = {
 
 export type IGithubUser = {
   id: number
+  login: string
   node_id: string
   avatar_url: string
   gravatar_id: string
